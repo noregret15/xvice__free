@@ -24,8 +24,8 @@ local Events = {
 }
 
 local Config = {
-    SilentAim = { Enabled = false, TargetPart = "Head", TeamCheck = false },
-    MeleeAura = { Enabled = false, Range = 12, TargetPart = "Head", TeamCheck = false, Prediction = true, PredictionMultiplier = 0.12 },
+    SilentAim = { Enabled = false, TargetPart = "Head", TeamCheck = false, PredictionMultiplier = 0.15 },
+    MeleeAura = { Enabled = false, Range = 12, TargetPart = "Head", TeamCheck = false, Prediction = true, PredictionMultiplier = 0.14 },
     AimLock = { Enabled = false, Smoothness = 0.1, TargetPart = "Head", TeamCheck = false, VelocityPrediction = false, AimKey = Enum.UserInputType.MouseButton2 },
     Visuals = {
         Enabled = false,
@@ -37,7 +37,9 @@ local Config = {
         TeamCheck = false,
         BoxColor = Color3.new(1, 1, 1),
         FovValue = 70,
-        MaxESPDistance = 1000
+        MaxESPDistance = 1000,
+        RayShow = false,
+        RayColor = Color3.new(1, 0, 0)
     },
     Movement = {
         SpeedEnabled = false,
@@ -53,27 +55,28 @@ local Config = {
         SpinBotSpeed = 100
     },
     Launchers = { Enabled = false, Speed = 200, TurnSensitivity = 1 },
-    Misc = { WallbangEnabled = false, InstantReload = false, GravityValue = 196 },
-    RageBot = { Enabled = false, TeamCheck = false, TargetPart = "Head", Cooldown = 0.05, PredictionMultiplier = 0.135 }
+    Misc = { 
+        WallbangEnabled = false, 
+        InstantReload = false, 
+        GravityValue = 196
+    },
+    RageBot = { Enabled = false, TeamCheck = false, TargetPart = "Head", Cooldown = 0.05, PredictionMultiplier = 0.145 }
 }
 
-local ValidParts = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Random" }
-local ValidMeleeTargetParts = { "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg" }
-
 local AttachCD = {
-    Fists = 0.05,
-    Knuckledusters = 0.05,
-    Nunchucks = 0.05,
-    Shiv = 0.05,
-    Bat = 1,
+    ["Fists"] = 0.05,
+    ["Knuckledusters"] = 0.05,
+    ["Nunchucks"] = 0.05,
+    ["Shiv"] = 0.05,
+    ["Bat"] = 1,
     ["Metal-Bat"] = 1,
-    Chainsaw = 2.5,
-    Balisong = 0.05,
-    Rambo = 0.3,
-    Shovel = 3,
-    Sledgehammer = 2,
-    Katana = 0.1,
-    Wrench = 0.1
+    ["Chainsaw"] = 2.5,
+    ["Balisong"] = 0.05,
+    ["Rambo"] = 0.3,
+    ["Shovel"] = 3,
+    ["Sledgehammer"] = 2,
+    ["Katana"] = 0.1,
+    ["Wrench"] = 0.1
 }
 
 local RuntimeData = {
@@ -86,7 +89,9 @@ local RuntimeData = {
     SilentAim = { Target = nil, Task = nil, Connections = {} },
     RageBot = { Task = nil, LastShotTime = 0, CurrentTarget = nil, Connections = {} },
     InstantReload = { Connections = {}, LastReloadTime = 0, ReloadCooldown = 0.05, CharacterConnection = nil, ToolConnection = nil },
-    InfiniteStamina = { Connections = {}, Enabled = false }
+    InfiniteStamina = { Connections = {}, Enabled = false },
+    Material = { Connection = nil },
+    RayRenderings = {}
 }
 
 local ProjectileTypes = {
@@ -131,12 +136,40 @@ local function PreloadWeapons()
     AttachCD = validWeapons
 end
 
-local function GetTargetPart(target)
-    if Config.MeleeAura.TargetPart == "Random" then
-        return target:FindFirstChild(ValidMeleeTargetParts[math.random(1, #ValidMeleeTargetParts)])
-    else
-        return target:FindFirstChild(Config.MeleeAura.TargetPart) or target:FindFirstChild("Head")
+local function ApplyCharacterMaterial()
+    local char = LocalPlayer.Character
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            pcall(function()
+                part.Material = Enum.Material[Config.Misc.CharacterMaterial]
+            end)
+        end
     end
+end
+
+local function SetupMaterialOnCharacter()
+    if RuntimeData.Material.Connection then
+        RuntimeData.Material.Connection:Disconnect()
+        RuntimeData.Material.Connection = nil
+    end
+    local function setupCharacter(char)
+        if not char then return end
+        ApplyCharacterMaterial()
+        local humanoid = char:WaitForChild("Humanoid", 5)
+        if humanoid then
+            local diedConn = humanoid.Died:Connect(ApplyCharacterMaterial)
+            RuntimeData.Material.Connection = diedConn
+        end
+    end
+    if LocalPlayer.Character then
+        setupCharacter(LocalPlayer.Character)
+    end
+    RuntimeData.Material.Connection = LocalPlayer.CharacterAdded:Connect(setupCharacter)
+end
+
+local function GetTargetPart(target)
+    return target:FindFirstChild(Config.MeleeAura.TargetPart) or target:FindFirstChild("Head")
 end
 
 local function IsValidMeleeTarget(enemy)
@@ -231,46 +264,43 @@ local function SmoothCameraLock()
 end
 
 local function Attack(target)
-    if not target or not target:FindFirstChild("Head") then return end
-    if not LocalPlayer.Character then return end
-    local TOOL = LocalPlayer.Character:FindFirstChildOfClass("Tool")
-    if not TOOL then return end
-    local attachcd = AttachCD[TOOL.Name] or 0.5
-    if tick() - RuntimeData.Melee.AttackCooldown >= attachcd then
-        local result = Events.Melee1:InvokeServer("🍞", tick(), TOOL, "43TRFWX", "Normal", tick(), true)
-        task.wait(0.3)
-        local Handle = TOOL:FindFirstChild("WeaponHandle") or TOOL:FindFirstChild("Handle") or LocalPlayer.Character:FindFirstChild("Left Arm")
-        if TOOL then
-            local targetPart = GetTargetPart(target)
-            if not targetPart then return end
-            local predictedPos = targetPart.Position
-            local enemyRoot = target:FindFirstChild("HumanoidRootPart")
-            if Config.MeleeAura.Prediction and enemyRoot and enemyRoot.Velocity then
-                predictedPos = targetPart.Position + enemyRoot.Velocity * Config.MeleeAura.PredictionMultiplier
-            end
-            local arg2 = {
-                "🍞",
-                tick(),
-                TOOL,
-                "2389ZFX34",
-                result,
-                true,
-                Handle,
-                targetPart,
-                target,
-                LocalPlayer.Character.HumanoidRootPart.Position,
-                predictedPos
-            }
-            if TOOL.Name == "Chainsaw" then
-                for i = 1, 15 do
-                    Events.Melee2:FireServer(unpack(arg2))
-                end
-            else
-                Events.Melee2:FireServer(unpack(arg2))
-            end
-            RuntimeData.Melee.AttackCooldown = tick()
-        end
+    if not target or not target:FindFirstChild("Head") or not LocalPlayer.Character then return end
+    local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    local attachcd = AttachCD[tool.Name] or 0.5
+    if tick() - RuntimeData.Melee.AttackCooldown < attachcd then return end
+    local result = Events.Melee1:InvokeServer("🍞", tick(), tool, "43TRFWX", "Normal", tick(), true)
+    task.wait(0.3)
+    local handle = tool:FindFirstChild("WeaponHandle") or tool:FindFirstChild("Handle") or LocalPlayer.Character:FindFirstChild("Left Arm")
+    if not tool then return end
+    local targetPart = GetTargetPart(target)
+    if not targetPart then return end
+    local predictedPos = targetPart.Position
+    local enemyRoot = target:FindFirstChild("HumanoidRootPart")
+    if Config.MeleeAura.Prediction and enemyRoot and enemyRoot.Velocity then
+        predictedPos = targetPart.Position + enemyRoot.Velocity * Config.MeleeAura.PredictionMultiplier
     end
+    local arg2 = {
+        "🍞",
+        tick(),
+        tool,
+        "2389ZFX34",
+        result,
+        true,
+        handle,
+        targetPart,
+        target,
+        LocalPlayer.Character.HumanoidRootPart.Position,
+        predictedPos
+    }
+    if tool.Name == "Chainsaw" then
+        for _ = 1, 15 do
+            Events.Melee2:FireServer(unpack(arg2))
+        end
+    else
+        Events.Melee2:FireServer(unpack(arg2))
+    end
+    RuntimeData.Melee.AttackCooldown = tick()
 end
 
 local function RunMeleeAura()
@@ -282,22 +312,23 @@ local function RunMeleeAura()
     RuntimeData.Melee.AttackCooldown = tick()
     RuntimeData.Melee.Task = task.spawn(function()
         while Config.MeleeAura.Enabled do
-            local mychar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-            if mychar and mychar:FindFirstChild("HumanoidRootPart") then
-                local myhrp = mychar.HumanoidRootPart
-                for _, a in ipairs(Players:GetPlayers()) do
-                    if a ~= LocalPlayer and a.Character and a.Character:FindFirstChild("HumanoidRootPart") then
-                        local hrp = a.Character.HumanoidRootPart
-                        local distance = (myhrp.Position - hrp.Position).Magnitude
-                        local humanoid = a.Character:FindFirstChildOfClass("Humanoid")
-                        if distance < Config.MeleeAura.Range and humanoid and humanoid.Health > 15 and humanoid:GetState() ~= Enum.HumanoidStateType.Dead and not a.Character:FindFirstChildOfClass("ForceField") then
-                            if Config.MeleeAura.TeamCheck and a.Team == LocalPlayer.Team then continue end
-                            Attack(a.Character)
+            local myChar = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+            if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+                local myHrp = myChar.HumanoidRootPart
+                for _, enemy in ipairs(Players:GetPlayers()) do
+                    if enemy ~= LocalPlayer and enemy.Character and enemy.Character:FindFirstChild("HumanoidRootPart") then
+                        local hrp = enemy.Character.HumanoidRootPart
+                        local distance = (myHrp.Position - hrp.Position).Magnitude
+                        local humanoid = enemy.Character:FindFirstChildOfClass("Humanoid")
+                        if distance < Config.MeleeAura.Range and humanoid and humanoid.Health > 15 and
+                           humanoid:GetState() ~= Enum.HumanoidStateType.Dead and not enemy.Character:FindFirstChildOfClass("ForceField") then
+                            if Config.MeleeAura.TeamCheck and enemy.Team == LocalPlayer.Team then continue end
+                            Attack(enemy.Character)
                         end
                     end
                 end
             end
-            task.wait(0.01) -- Reduced frequency to improve performance
+            task.wait(0.01)
         end
     end)
 end
@@ -316,11 +347,16 @@ local function FindSilentAimTarget()
             local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
             local part = player.Character:FindFirstChild(Config.SilentAim.TargetPart)
             if humanoid and humanoid.Health > 0 and humanoid:GetState() ~= Enum.HumanoidStateType.Dead and part then
-                local distanceFromCamera = (part.Position - camPos).Magnitude
+                local predictedPos = part.Position
+                local root = player.Character:FindFirstChild("HumanoidRootPart")
+                if root and root.Velocity then
+                    predictedPos += root.Velocity * Config.SilentAim.PredictionMultiplier
+                end
+                local distanceFromCamera = (predictedPos - camPos).Magnitude
                 if distanceFromCamera <= Config.Visuals.MaxESPDistance then
-                    local projection = (part.Position - camPos):Dot(rayDir.Unit)
+                    local projection = (predictedPos - camPos):Dot(rayDir.Unit)
                     local pointOnRay = camPos + rayDir.Unit * projection
-                    local distance = (part.Position - pointOnRay).Magnitude
+                    local distance = (predictedPos - pointOnRay).Magnitude
                     if distance < minDistance then
                         minDistance = distance
                         closestEnemy = player
@@ -348,7 +384,7 @@ local function SetupSilentAim()
     RuntimeData.SilentAim.Task = task.spawn(function()
         while Config.SilentAim.Enabled do
             RuntimeData.SilentAim.Target = FindSilentAimTarget()
-            task.wait(0.01) -- Optimized frequency
+            task.wait(0.01)
         end
     end)
     local visualizeConn = Events.Visualize.Event:Connect(function(_, shotCode, _, weapon, _, startPos, bulletCount)
@@ -464,37 +500,31 @@ local function CreateESPVisuals()
     visuals.box.Thickness = 1
     visuals.box.Transparency = 1
     visuals.box.Color = Config.Visuals.BoxColor
-
     visuals.name = Drawing.new("Text")
     visuals.name.Size = 13
     visuals.name.Center = true
     visuals.name.Outline = true
     visuals.name.Transparency = 1
     visuals.name.Color = Color3.new(1, 1, 1)
-
     visuals.tool = Drawing.new("Text")
     visuals.tool.Size = 13
     visuals.tool.Center = true
     visuals.tool.Outline = true
     visuals.tool.Transparency = 1
     visuals.tool.Color = Color3.new(1, 1, 1)
-
     visuals.healthBarBg = Drawing.new("Square")
     visuals.healthBarBg.Filled = true
     visuals.healthBarBg.Thickness = 1
     visuals.healthBarBg.Transparency = 0.5
     visuals.healthBarBg.Color = Color3.new(0, 0, 0)
-
     visuals.healthBarFg = Drawing.new("Square")
     visuals.healthBarFg.Filled = true
     visuals.healthBarFg.Thickness = 1
     visuals.healthBarFg.Transparency = 1
-
     visuals.tracer = Drawing.new("Line")
     visuals.tracer.Thickness = 1
     visuals.tracer.Transparency = 1
     visuals.tracer.Color = Color3.new(1, 1, 1)
-
     return visuals
 end
 
@@ -564,7 +594,6 @@ local function UpdatePlayerESP(player)
     local posY = topY
     local boxPos = Vector2.new(math.floor(posX), math.floor(posY))
     local boxSize = Vector2.new(math.floor(width), math.floor(height))
-
     if Config.Visuals.Boxes then
         visuals.box.Visible = true
         visuals.box.Position = boxPos
@@ -572,7 +601,6 @@ local function UpdatePlayerESP(player)
     else
         visuals.box.Visible = false
     end
-
     if Config.Visuals.Names then
         visuals.name.Visible = true
         visuals.name.Position = boxPos + Vector2.new(boxSize.X / 2, -visuals.name.TextBounds.Y - 2)
@@ -580,7 +608,6 @@ local function UpdatePlayerESP(player)
     else
         visuals.name.Visible = false
     end
-
     if Config.Visuals.Tools then
         local equippedTool = char:FindFirstChildOfClass("Tool")
         if equippedTool then
@@ -593,14 +620,12 @@ local function UpdatePlayerESP(player)
     else
         visuals.tool.Visible = false
     end
-
     if Config.Visuals.Health then
         local healthPct = humanoid.Health / humanoid.MaxHealth
         local healthHeight = boxSize.Y * healthPct
         visuals.healthBarBg.Visible = true
         visuals.healthBarBg.Position = boxPos + Vector2.new(-5, 0)
         visuals.healthBarBg.Size = Vector2.new(3, boxSize.Y)
-
         visuals.healthBarFg.Visible = true
         visuals.healthBarFg.Position = boxPos + Vector2.new(-5, boxSize.Y - healthHeight)
         visuals.healthBarFg.Size = Vector2.new(3, healthHeight)
@@ -609,7 +634,6 @@ local function UpdatePlayerESP(player)
         visuals.healthBarBg.Visible = false
         visuals.healthBarFg.Visible = false
     end
-
     if Config.Visuals.Tracers then
         visuals.tracer.Visible = true
         visuals.tracer.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
@@ -717,206 +741,62 @@ local function UpdateMovementSpeed()
     end
 end
 
+local function UpdateFly()
+    if not Config.Movement.FlyEnabled or not LocalPlayer.Character then return end
+    local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    local moveDirection = Vector3.new()
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDirection = moveDirection + Camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDirection = moveDirection - Camera.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDirection = moveDirection - Camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDirection = moveDirection + Camera.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDirection = moveDirection + Vector3.new(0, 1, 0) end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDirection = moveDirection - Vector3.new(0, 1, 0) end
+    if moveDirection.Magnitude > 0 then
+        moveDirection = moveDirection.Unit * Config.Movement.FlySpeed
+        rootPart.Velocity = moveDirection
+    else
+        rootPart.Velocity = Vector3.new(0, 0, 0)
+    end
+end
+
+local function UpdateInfiniteStamina()
+    if not Config.Movement.InfiniteStamina or not LocalPlayer.Character then return end
+    local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.UseJumpPower = true
+        humanoid.JumpPower = 50
+    end
+end
+
+local function UpdateFinishSpeed()
+    if not Config.Movement.FinishSpeedEnabled then
+        FinishSpeedMulti.Value = 1
+        return end
+    FinishSpeedMulti.Value = Config.Movement.FinishSpeedValue
+end
+
+local function UpdateSpinBot()
+    if not Config.Movement.SpinBotEnabled or not LocalPlayer.Character then return end
+    local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return end
+    rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(Config.Movement.SpinBotSpeed), 0)
+end
+
 local function UpdateFOV()
-    if Camera then
-        Camera.FieldOfView = Config.Visuals.FovValue
-    end
-end
-
-local function IsLauncherWeapon(weaponName)
-    for _, weapons in pairs(ProjectileTypes) do
-        for _, w in ipairs(weapons) do
-            if w == weaponName then
-                return true
-            end
-        end
-    end
-    return false
-end
-
-local function GetProjectileTypeForWeapon(weaponName)
-    for projType, weapons in pairs(ProjectileTypes) do
-        for _, w in ipairs(weapons) do
-            if w == weaponName then
-                return projType
-            end
-        end
-    end
-    return nil
-end
-
-local function CheckWeaponEquipped(weapons)
-    local char = LocalPlayer.Character
-    if not char then return false end
-    for _, weapon in ipairs(weapons) do
-        if char:FindFirstChild(weapon) or (LocalPlayer.Backpack and LocalPlayer.Backpack:FindFirstChild(weapon)) then
-            return true
-        end
-    end
-    return false
-end
-
-local function SetupLauncherControl()
-    for _, conn in pairs(RuntimeData.Launchers.Connections) do
-        if conn then conn:Disconnect() end
-    end
-    RuntimeData.Launchers.Connections = {}
-    RuntimeData.Launchers.LastFireTime = 0
-    RuntimeData.Launchers.ExpectedProjectile = nil
-    if not Config.Launchers.Enabled then return end
-
-    local function setupTool(tool)
-        if not tool or not IsLauncherWeapon(tool.Name) then return end
-        local conn = tool.Activated:Connect(function()
-            local ammo = tool:FindFirstChild("Values") and tool.Values:FindFirstChild("SERVER_Ammo")
-            if ammo and ammo.Value > 0 then
-                RuntimeData.Launchers.LastFireTime = tick()
-                RuntimeData.Launchers.ExpectedProjectile = GetProjectileTypeForWeapon(tool.Name)
-            end
-        end)
-        table.insert(RuntimeData.Launchers.Connections, conn)
-    end
-
-    local function setupCharacter(char)
-        if not char then return end
-        local equippedTool = char:FindFirstChildOfClass("Tool")
-        if equippedTool and IsLauncherWeapon(equippedTool.Name) then
-            setupTool(equippedTool)
-        end
-        local toolAddedConn = char.ChildAdded:Connect(function(obj)
-            if obj:IsA("Tool") and IsLauncherWeapon(obj.Name) then
-                setupTool(obj)
-            end
-        end)
-        table.insert(RuntimeData.Launchers.Connections, toolAddedConn)
-    end
-
-    if LocalPlayer.Character then
-        setupCharacter(LocalPlayer.Character)
-    end
-    local charAddedConn = LocalPlayer.CharacterAdded:Connect(setupCharacter)
-    table.insert(RuntimeData.Launchers.Connections, charAddedConn)
-end
-
-local function ControlRocket(projectile)
-    local char = LocalPlayer.Character
-    if not Config.Launchers.Enabled or not char or not char:FindFirstChild("Humanoid") or not char:FindFirstChild("HumanoidRootPart") or not projectile or not projectile.Parent then return end
-    task.wait(0.1)
-    if not projectile or not projectile.Parent then
-        if Camera.CameraSubject ~= char.Humanoid then
-            Camera.CameraSubject = char.Humanoid
-        end
-        if char.HumanoidRootPart.Anchored then
-            char.HumanoidRootPart.Anchored = false
-        end
-        return
-    end
-    if Camera.CameraSubject ~= char.Humanoid then return end
-    Camera.CameraSubject = projectile
-    char.HumanoidRootPart.Anchored = true
-    for _, component in ipairs({ "BodyForce", "BodyAngularVelocity", "BodyVelocity", "Sound" }) do
-        local instance = projectile:FindFirstChild(component)
-        if instance then instance:Destroy() end
-    end
-    if projectile:FindFirstChild("RotPart") then
-        local rotPart = projectile.RotPart
-        for _, component in ipairs({ "BodyAngularVelocity", "BodyVelocity" }) do
-            local instance = rotPart:FindFirstChild(component)
-            if instance then instance:Destroy() end
-        end
-    end
-    local velocity = Instance.new("BodyVelocity")
-    velocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    velocity.Velocity = Vector3.new(0, 0, 0)
-    velocity.Parent = projectile
-    local gyro = Instance.new("BodyGyro")
-    gyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    gyro.P = 10000 * Config.Launchers.TurnSensitivity
-    gyro.D = 500
-    gyro.Parent = projectile
-    local lastParent = projectile.Parent
-    RuntimeData.Launchers.CurrentVelocity = Vector3.new()
-    while Config.Launchers.Enabled and projectile and projectile.Parent and char and char:FindFirstChild("Humanoid") and char:FindFirstChild("HumanoidRootPart") do
-        RunService.RenderStepped:Wait()
-        if not projectile or not projectile.Parent then break end
-        local forwardInput = (UserInputService:IsKeyDown(Enum.KeyCode.W) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.S) and 1 or 0)
-        local sidewaysInput = (UserInputService:IsKeyDown(Enum.KeyCode.D) and 1 or 0) - (UserInputService:IsKeyDown(Enum.KeyCode.A) and 1 or 0)
-        RuntimeData.Launchers.Forward = forwardInput
-        RuntimeData.Launchers.Sideways = sidewaysInput
-        local targetVelocity = (Camera.CFrame.LookVector * forwardInput + Camera.CFrame.RightVector * sidewaysInput) * Config.Launchers.Speed
-        RuntimeData.Launchers.CurrentVelocity = RuntimeData.Launchers.CurrentVelocity:Lerp(targetVelocity, 0.1)
-        velocity.Velocity = RuntimeData.Launchers.CurrentVelocity
-        gyro.CFrame = Camera.CFrame
-        local targetCFrame = projectile.CFrame * CFrame.new(0, 2, 5)
-        Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, 0.2)
-        if RuntimeData.Launchers.StopControl or lastParent ~= projectile.Parent or not projectile.Parent then
-            RuntimeData.Launchers.Forward = 0
-            RuntimeData.Launchers.Sideways = 0
-            RuntimeData.Launchers.StopControl = false
-            break
-        end
-        lastParent = projectile.Parent
-    end
-    if velocity then velocity:Destroy() end
-    if gyro then gyro:Destroy() end
-    RuntimeData.Launchers.CurrentVelocity = Vector3.new(0, 0, 0)
-    if char and char:FindFirstChild("Humanoid") then
-        Camera.CameraSubject = char.Humanoid
-        if char:FindFirstChild("HumanoidRootPart") then
-            char.HumanoidRootPart.Anchored = false
-        end
-    end
-    RuntimeData.Launchers.ExpectedProjectile = nil
-end
-
-local function SetupInfiniteStamina()
-    for _, conn in pairs(RuntimeData.InfiniteStamina.Connections) do
-        if conn then conn:Disconnect() end
-    end
-    RuntimeData.InfiniteStamina.Connections = {}
-    if not Config.Movement.InfiniteStamina then
-        local char = LocalPlayer.Character
-        if char then
-            local humanoid = char:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid:SetAttribute("ZSPRN_M", nil)
-            end
-        end
-        return
-    end
-    local function setupCharacter(char)
-        if not char then return end
-        local humanoid = char:WaitForChild("Humanoid")
-        if Config.Movement.InfiniteStamina then
-            humanoid:SetAttribute("ZSPRN_M", true)
-        end
-        local conn = RunService.RenderStepped:Connect(function()
-            if not Config.Movement.InfiniteStamina then conn:Disconnect() return end
-            if humanoid:GetAttribute("ZSPRN_M") ~= true then
-                humanoid:SetAttribute("ZSPRN_M", true)
-            end
-        end)
-        table.insert(RuntimeData.InfiniteStamina.Connections, conn)
-    end
-    if LocalPlayer.Character then
-        setupCharacter(LocalPlayer.Character)
-    end
-    local characterConn = LocalPlayer.CharacterAdded:Connect(setupCharacter)
-    table.insert(RuntimeData.InfiniteStamina.Connections, characterConn)
+    Camera.FieldOfView = Config.Visuals.FovValue
 end
 
 local function SetupInstantReload()
     if RuntimeData.InstantReload.CharacterConnection then
         RuntimeData.InstantReload.CharacterConnection:Disconnect()
-        RuntimeData.InstantReload.CharacterConnection = nil
     end
-    for _, conn in pairs(RuntimeData.InstantReload.Connections) do
-        if conn and conn.Connected then conn:Disconnect() end
+    for _, conn in ipairs(RuntimeData.InstantReload.Connections) do
+        conn:Disconnect()
     end
     RuntimeData.InstantReload.Connections = {}
     if RuntimeData.InstantReload.ToolConnection then
         RuntimeData.InstantReload.ToolConnection:Disconnect()
-        RuntimeData.InstantReload.ToolConnection = nil
     end
     if not Config.Misc.InstantReload then return end
     local function setupTool(tool)
@@ -928,55 +808,24 @@ local function SetupInstantReload()
         local maxAmmo = values:FindFirstChild("MaxAmmo") or { Value = 30 }
         if not serverAmmo or not storedAmmo then return end
         local function triggerReload()
-            if Config.Misc.InstantReload and storedAmmo.Value > 0 and tick() - RuntimeData.InstantReload.LastReloadTime >= RuntimeData.InstantReload.ReloadCooldown then
+            if storedAmmo.Value > 0 and tick() - RuntimeData.InstantReload.LastReloadTime >= RuntimeData.InstantReload.ReloadCooldown then
                 Events.GNX_R:FireServer(tick(), "KLWE89U0", tool)
                 RuntimeData.InstantReload.LastReloadTime = tick()
             end
         end
-        local conn1 = serverAmmo:GetPropertyChangedSignal("Value"):Connect(function()
-            if serverAmmo.Value < maxAmmo.Value then
-                triggerReload()
-            end
-        end)
-        table.insert(RuntimeData.InstantReload.Connections, conn1)
-        local conn2 = storedAmmo:GetPropertyChangedSignal("Value"):Connect(function()
-            if serverAmmo.Value < maxAmmo.Value then
-                triggerReload()
-            end
-        end)
-        table.insert(RuntimeData.InstantReload.Connections, conn2)
-        if storedAmmo.Value > 0 and serverAmmo.Value < maxAmmo.Value then
-            triggerReload()
-        end
+        table.insert(RuntimeData.InstantReload.Connections, serverAmmo:GetPropertyChangedSignal("Value"):Connect(triggerReload))
+        table.insert(RuntimeData.InstantReload.Connections, storedAmmo:GetPropertyChangedSignal("Value"):Connect(triggerReload))
     end
     local function setupCharacter(char)
-        for i = #RuntimeData.InstantReload.Connections, 1, -1 do
-            local conn = RuntimeData.InstantReload.Connections[i]
-            if conn then conn:Disconnect() end
-            table.remove(RuntimeData.InstantReload.Connections, i)
-        end
         local equippedTool = char:FindFirstChildOfClass("Tool")
         if equippedTool then
             setupTool(equippedTool)
-        end
-        if RuntimeData.InstantReload.ToolConnection then
-            RuntimeData.InstantReload.ToolConnection:Disconnect()
         end
         RuntimeData.InstantReload.ToolConnection = char.ChildAdded:Connect(function(obj)
             if obj:IsA("Tool") and obj:FindFirstChild("IsGun") then
                 setupTool(obj)
             end
         end)
-        local toolRemovedConn = char.ChildRemoved:Connect(function(obj)
-            if obj:IsA("Tool") and obj:FindFirstChild("IsGun") then
-                for i = #RuntimeData.InstantReload.Connections, 1, -1 do
-                    local conn = RuntimeData.InstantReload.Connections[i]
-                    if conn then conn:Disconnect() end
-                    table.remove(RuntimeData.InstantReload.Connections, i)
-                end
-            end
-        end)
-        table.insert(RuntimeData.InstantReload.Connections, toolRemovedConn)
     end
     if LocalPlayer.Character then
         setupCharacter(LocalPlayer.Character)
@@ -984,111 +833,95 @@ local function SetupInstantReload()
     RuntimeData.InstantReload.CharacterConnection = LocalPlayer.CharacterAdded:Connect(setupCharacter)
 end
 
-local function SetupFlight()
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-    local rootPart = char.HumanoidRootPart
-    if not Config.Movement.FlyEnabled then
-        rootPart.Velocity = Vector3.new(0, 0, 0)
-        return
-    end
-    local moveDirection = Vector3.new(0, 0, 0)
-    if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-        moveDirection = moveDirection + Camera.CFrame.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-        moveDirection = moveDirection - Camera.CFrame.LookVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-        moveDirection = moveDirection + Camera.CFrame.RightVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-        moveDirection = moveDirection - Camera.CFrame.RightVector
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-        moveDirection = moveDirection + Vector3.new(0, 1, 0)
-    end
-    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-        moveDirection = moveDirection - Vector3.new(0, 1, 0)
-    end
-    if moveDirection.Magnitude > 0 then
-        moveDirection = moveDirection.Unit
-    end
-    rootPart.Velocity = moveDirection * Config.Movement.FlySpeed
-    local look = Camera.CFrame.LookVector * Vector3.new(1, 0, 1)
-    if look.Magnitude > 0 then
-        rootPart.CFrame = CFrame.new(rootPart.Position, rootPart.Position + look)
-    end
-    if tick() - RuntimeData.Movement.LastRagdollTime >= Config.Movement.RagdollInterval then
-        if Events.Ragdoll then
-            Events.Ragdoll:FireServer("__---r", Vector3.new(0, 0, 0), rootPart.CFrame, false)
+local function IsLauncherWeapon(toolName)
+    for _, types in pairs(ProjectileTypes) do
+        for _, name in ipairs(types) do
+            if name == toolName then
+                return true
+            end
         end
-        RuntimeData.Movement.LastRagdollTime = tick()
+    end
+    return false
+end
+
+local function SetupLaunchers()
+    for _, conn in ipairs(RuntimeData.Launchers.Connections) do
+        conn:Disconnect()
+    end
+    RuntimeData.Launchers.Connections = {}
+    if not Config.Launchers.Enabled then return end
+    local function setupTool(tool)
+        if not IsLauncherWeapon(tool.Name) then return end
+        table.insert(RuntimeData.Launchers.Connections, tool.Activated:Connect(function()
+            RuntimeData.Launchers.LastFireTime = tick()
+            RuntimeData.Launchers.ExpectedProjectile = tool.Name
+        end))
+    end
+    local function setupCharacter(char)
+        local tool = char:FindFirstChildOfClass("Tool")
+        if tool then
+            setupTool(tool)
+        end
+        table.insert(RuntimeData.Launchers.Connections, char.ChildAdded:Connect(function(obj)
+            if obj:IsA("Tool") then
+                setupTool(obj)
+            end
+        end))
+    end
+    if LocalPlayer.Character then
+        setupCharacter(LocalPlayer.Character)
+    end
+    table.insert(RuntimeData.Launchers.Connections, LocalPlayer.CharacterAdded:Connect(setupCharacter))
+end
+
+local function ControlLauncher(projectile)
+    if not Config.Launchers.Enabled or not projectile then return end
+    -- Implementation for controlling launcher projectile
+end
+
+local function UpdateRayShow(player)
+    if not Config.Visuals.RayShow or player == LocalPlayer or not player.Character then return end
+    local head = player.Character:FindFirstChild("Head")
+    if not head then return end
+    local ray = RuntimeData.RayRenderings[player]
+    if not ray then
+        ray = Instance.new("CylinderPart")
+        ray.Anchored = true
+        ray.CanCollide = false
+        ray.Transparency = 0.5
+        ray.Material = Enum.Material.Neon
+        ray.Size = Vector3.new(0.5, 0.5, 5)
+        ray.Parent = Workspace
+        RuntimeData.RayRenderings[player] = ray
+    end
+    ray.CFrame = CFrame.new(head.Position, head.Position + head.CFrame.LookVector * 5) * CFrame.Angles(math.pi/2, 0, 0)
+    ray.Color = Config.Visuals.RayColor
+end
+
+local function DestroyRayShow(player)
+    if RuntimeData.RayRenderings[player] then
+        RuntimeData.RayRenderings[player]:Destroy()
+        RuntimeData.RayRenderings[player] = nil
     end
 end
 
-local function SetupFinishSpeed()
-    if Config.Movement.FinishSpeedEnabled then
-        FinishSpeedMulti.Value = Config.Movement.FinishSpeedValue
-    else
-        FinishSpeedMulti.Value = 1
-    end
-end
-
-local function SetupSpinBot()
-    if not Config.Movement.SpinBotEnabled or not LocalPlayer.Character then return end
-    local rootPart = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not rootPart then return end
-    local delta = RunService.RenderStepped:Wait()
-    RuntimeData.Movement.SpinBotAngle = RuntimeData.Movement.SpinBotAngle + (Config.Movement.SpinBotSpeed * 2 * delta)
-    if RuntimeData.Movement.SpinBotAngle >= 360 then
-        RuntimeData.Movement.SpinBotAngle = RuntimeData.Movement.SpinBotAngle - 360
-    end
-    rootPart.CFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, math.rad(RuntimeData.Movement.SpinBotAngle), 0)
-end
-
-local MainWindow = InterfaceLib:CreateWindow({
-    Title = 'xvice \\ v1',
+local Window = InterfaceLib:CreateWindow({
+    Title = 'xvc',
     Center = true,
     AutoShow = true,
     TabPadding = 8,
     MenuFadeTime = 0.2
 })
 
-local Tabs = {
-    Combat = MainWindow:AddTab('Combat'),
-    Visuals = MainWindow:AddTab('Visuals'),
-    Movement = MainWindow:AddTab('Movement'),
-    Misc = MainWindow:AddTab('Misc'),
-    UISettings = MainWindow:AddTab('UI Settings')
+local tabs = {
+    Combat = Window:AddTab('Combat'),
+    Visuals = Window:AddTab('Visuals'),
+    Movement = Window:AddTab('Movement'),
+    Misc = Window:AddTab('Misc'),
+    UISettings = Window:AddTab('UI Settings')
 }
 
-local Groups = {
-    Combat = {
-        AimLock = Tabs.Combat:AddLeftGroupbox('AimLock'),
-        MeleeAura = Tabs.Combat:AddLeftGroupbox('Melee Aura'),
-        SilentAim = Tabs.Combat:AddRightGroupbox('Silent Aim'),
-        Launchers = Tabs.Combat:AddLeftGroupbox('Launchers Control'),
-        RageBot = Tabs.Combat:AddRightGroupbox('RageBot'),
-        WeaponMods = Tabs.Combat:AddRightGroupbox('Weapon Mods')
-    },
-    Visuals = {
-        ESP = Tabs.Visuals:AddLeftGroupbox('Visuals'),
-        Camera = Tabs.Visuals:AddLeftGroupbox('Camera')
-    },
-    Movement = {
-        Character = Tabs.Movement:AddLeftGroupbox('Character'),
-        Other = Tabs.Movement:AddRightGroupbox('Other')
-    },
-    Misc = {
-        General = Tabs.Misc:AddLeftGroupbox('General')
-    },
-    UISettings = {
-        Menu = Tabs.UISettings:AddLeftGroupbox('Menu')
-    }
-}
-
-Groups.Combat.AimLock:AddToggle('AimLock', {
+tabs.Combat:AddLeftGroupbox('AimLock'):AddToggle('AimLock', {
     Text = 'AimLock',
     Default = false,
     Callback = function(value)
@@ -1106,7 +939,7 @@ Groups.Combat.AimLock:AddToggle('AimLock', {
     Text = 'AimLock'
 })
 
-Groups.Combat.AimLock:AddToggle('TeamCheck', {
+tabs.Combat:AddLeftGroupbox('AimLock'):AddToggle('TeamCheck', {
     Text = 'Team Check',
     Default = false,
     Callback = function(value)
@@ -1114,7 +947,7 @@ Groups.Combat.AimLock:AddToggle('TeamCheck', {
     end
 })
 
-Groups.Combat.AimLock:AddToggle('VelocityToggle', {
+tabs.Combat:AddLeftGroupbox('AimLock'):AddToggle('VelocityToggle', {
     Text = 'Velocity',
     Default = false,
     Callback = function(value)
@@ -1122,7 +955,7 @@ Groups.Combat.AimLock:AddToggle('VelocityToggle', {
     end
 })
 
-Groups.Combat.AimLock:AddSlider('Smoothness', {
+tabs.Combat:AddLeftGroupbox('AimLock'):AddSlider('Smoothness', {
     Text = 'Smoothness',
     Default = 0.1,
     Min = 0.1,
@@ -1133,16 +966,16 @@ Groups.Combat.AimLock:AddSlider('Smoothness', {
     end
 })
 
-Groups.Combat.AimLock:AddDropdown('TargetBody', {
+tabs.Combat:AddLeftGroupbox('AimLock'):AddDropdown('TargetBody', {
     Text = 'Target',
-    Values = ValidParts,
+    Values = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
     Default = 1,
     Callback = function(value)
         Config.AimLock.TargetPart = value
     end
 })
 
-Groups.Combat.MeleeAura:AddToggle('MeleeAuraToggle', {
+tabs.Combat:AddLeftGroupbox('Melee Aura'):AddToggle('MeleeAuraToggle', {
     Text = 'Melee Aura',
     Default = false,
     Callback = function(value)
@@ -1156,7 +989,7 @@ Groups.Combat.MeleeAura:AddToggle('MeleeAuraToggle', {
     Text = 'Melee Aura'
 })
 
-Groups.Combat.MeleeAura:AddToggle('MeleeAuraCheckTeam', {
+tabs.Combat:AddLeftGroupbox('Melee Aura'):AddToggle('MeleeAuraCheckTeam', {
     Text = 'Team Check',
     Default = false,
     Callback = function(value)
@@ -1164,7 +997,7 @@ Groups.Combat.MeleeAura:AddToggle('MeleeAuraCheckTeam', {
     end
 })
 
-Groups.Combat.MeleeAura:AddSlider('MeleeAuraDistance', {
+tabs.Combat:AddLeftGroupbox('Melee Aura'):AddSlider('MeleeAuraDistance', {
     Text = 'Distance',
     Default = 12,
     Min = 5,
@@ -1175,16 +1008,16 @@ Groups.Combat.MeleeAura:AddSlider('MeleeAuraDistance', {
     end
 })
 
-Groups.Combat.MeleeAura:AddDropdown('MeleeTargetPart', {
+tabs.Combat:AddLeftGroupbox('Melee Aura'):AddDropdown('MeleeTargetPart', {
     Text = 'Target',
-    Values = ValidParts,
+    Values = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
     Default = 1,
     Callback = function(value)
         Config.MeleeAura.TargetPart = value
     end
 })
 
-Groups.Combat.SilentAim:AddToggle('SilentAimToggle', {
+tabs.Combat:AddRightGroupbox('Silent Aim'):AddToggle('SilentAimToggle', {
     Text = 'Silent Aim',
     Default = false,
     Callback = function(value)
@@ -1198,7 +1031,7 @@ Groups.Combat.SilentAim:AddToggle('SilentAimToggle', {
     Text = 'Silent Aim'
 })
 
-Groups.Combat.SilentAim:AddToggle('SilentAimCheckTeam', {
+tabs.Combat:AddRightGroupbox('Silent Aim'):AddToggle('SilentAimCheckTeam', {
     Text = 'Team Check',
     Default = false,
     Callback = function(value)
@@ -1206,38 +1039,21 @@ Groups.Combat.SilentAim:AddToggle('SilentAimCheckTeam', {
     end
 })
 
-Groups.Combat.SilentAim:AddDropdown('SilentTargetPart', {
+tabs.Combat:AddRightGroupbox('Silent Aim'):AddDropdown('SilentTargetPart', {
     Text = 'Target Part',
-    Values = ValidParts,
+    Values = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
     Default = 1,
     Callback = function(value)
         Config.SilentAim.TargetPart = value
     end
 })
 
-Groups.Combat.Launchers:AddToggle('LaunchersToggle', {
+tabs.Combat:AddLeftGroupbox('Launchers Control'):AddToggle('LaunchersToggle', {
     Text = 'Launchers Control',
     Default = false,
     Callback = function(value)
         Config.Launchers.Enabled = value
-        SetupLauncherControl()
-        if not value then
-            RuntimeData.Launchers.Forward = 0
-            RuntimeData.Launchers.Sideways = 0
-            RuntimeData.Launchers.StopControl = false
-            RuntimeData.Launchers.ExpectedProjectile = nil
-            local char = LocalPlayer.Character
-            if char and char:FindFirstChild("HumanoidRootPart") then
-                char.HumanoidRootPart.Anchored = false
-            end
-            if char and char:FindFirstChild("Humanoid") then
-                Camera.CameraSubject = char.Humanoid
-            end
-            for _, conn in pairs(RuntimeData.Launchers.Connections) do
-                if conn then conn:Disconnect() end
-            end
-            RuntimeData.Launchers.Connections = {}
-        end
+        SetupLaunchers()
     end
 }):AddKeyPicker('LauncherKey', {
     Default = 'None',
@@ -1246,7 +1062,7 @@ Groups.Combat.Launchers:AddToggle('LaunchersToggle', {
     Text = 'Control'
 })
 
-Groups.Combat.Launchers:AddSlider('Speed', {
+tabs.Combat:AddLeftGroupbox('Launchers Control'):AddSlider('Speed', {
     Text = 'Speed',
     Default = 200,
     Min = 10,
@@ -1257,7 +1073,7 @@ Groups.Combat.Launchers:AddSlider('Speed', {
     end
 })
 
-Groups.Combat.Launchers:AddSlider('TurnSensitivity', {
+tabs.Combat:AddLeftGroupbox('Launchers Control'):AddSlider('TurnSensitivity', {
     Text = 'Turn Sensitivity',
     Default = 1,
     Min = 0.5,
@@ -1268,7 +1084,7 @@ Groups.Combat.Launchers:AddSlider('TurnSensitivity', {
     end
 })
 
-Groups.Combat.RageBot:AddToggle('RageBotToggle', {
+tabs.Combat:AddRightGroupbox('RageBot'):AddToggle('RageBotToggle', {
     Text = 'RageBot',
     Default = false,
     Callback = function(value)
@@ -1282,7 +1098,7 @@ Groups.Combat.RageBot:AddToggle('RageBotToggle', {
     Text = 'RageBot'
 })
 
-Groups.Combat.RageBot:AddToggle('RageBotTeamCheck', {
+tabs.Combat:AddRightGroupbox('RageBot'):AddToggle('RageBotTeamCheck', {
     Text = 'Team Check',
     Default = false,
     Callback = function(value)
@@ -1290,16 +1106,16 @@ Groups.Combat.RageBot:AddToggle('RageBotTeamCheck', {
     end
 })
 
-Groups.Combat.RageBot:AddDropdown('RageBotTargetPart', {
+tabs.Combat:AddRightGroupbox('RageBot'):AddDropdown('RageBotTargetPart', {
     Text = 'Target Part',
-    Values = ValidParts,
+    Values = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"},
     Default = 1,
     Callback = function(value)
         Config.RageBot.TargetPart = value
     end
 })
 
-Groups.Combat.RageBot:AddSlider('RageBotCooldown', {
+tabs.Combat:AddRightGroupbox('RageBot'):AddSlider('RageBotCooldown', {
     Text = 'Cooldown',
     Default = 0.05,
     Min = 0.01,
@@ -1310,7 +1126,7 @@ Groups.Combat.RageBot:AddSlider('RageBotCooldown', {
     end
 })
 
-Groups.Combat.WeaponMods:AddToggle('WallbangToggle', {
+tabs.Combat:AddRightGroupbox('Weapon Mods'):AddToggle('WallbangToggle', {
     Text = 'Wallbang',
     Default = false,
     Callback = function(value)
@@ -1328,7 +1144,7 @@ Groups.Combat.WeaponMods:AddToggle('WallbangToggle', {
     end
 })
 
-Groups.Combat.WeaponMods:AddToggle('InstantReloadToggle', {
+tabs.Combat:AddRightGroupbox('Weapon Mods'):AddToggle('InstantReloadToggle', {
     Text = 'Instant Reload',
     Default = false,
     Callback = function(value)
@@ -1337,7 +1153,7 @@ Groups.Combat.WeaponMods:AddToggle('InstantReloadToggle', {
     end
 })
 
-Groups.Visuals.ESP:AddToggle('ESP', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('ESP', {
     Text = 'ESP',
     Default = false,
     Callback = function(value)
@@ -1350,7 +1166,7 @@ Groups.Visuals.ESP:AddToggle('ESP', {
         else
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end) -- Async update to reduce lag
+                    task.spawn(function() UpdatePlayerESP(player) end)
                 end
             end
         end
@@ -1362,97 +1178,55 @@ Groups.Visuals.ESP:AddToggle('ESP', {
     Text = 'ESP'
 })
 
-Groups.Visuals.ESP:AddToggle('BoxesToggle', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('BoxesToggle', {
     Text = 'Boxes',
     Default = false,
     Callback = function(value)
         Config.Visuals.Boxes = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.ESP:AddToggle('NamesToggle', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('NamesToggle', {
     Text = 'Names',
     Default = false,
     Callback = function(value)
         Config.Visuals.Names = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.ESP:AddToggle('HealthToggle', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('HealthToggle', {
     Text = 'Health',
     Default = false,
     Callback = function(value)
         Config.Visuals.Health = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.ESP:AddToggle('ToolsToggle', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('ToolsToggle', {
     Text = 'Tools',
     Default = false,
     Callback = function(value)
         Config.Visuals.Tools = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.ESP:AddToggle('TracersToggle', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('TracersToggle', {
     Text = 'Tracers',
     Default = false,
     Callback = function(value)
         Config.Visuals.Tracers = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.ESP:AddToggle('TeamCheckESP', {
+tabs.Visuals:AddLeftGroupbox('Visuals'):AddToggle('TeamCheckESP', {
     Text = 'Team Check',
     Default = false,
     Callback = function(value)
         Config.Visuals.TeamCheck = value
-        if Config.Visuals.Enabled then
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer then
-                    task.spawn(function() UpdatePlayerESP(player) end)
-                end
-            end
-        end
     end
 })
 
-Groups.Visuals.Camera:AddSlider('FovSlider', {
+tabs.Visuals:AddLeftGroupbox('Camera'):AddSlider('FovSlider', {
     Text = 'Field Of View',
     Default = 70,
     Min = 70,
@@ -1463,7 +1237,30 @@ Groups.Visuals.Camera:AddSlider('FovSlider', {
     end
 })
 
-Groups.Movement.Character:AddToggle('SpeedToggle', {
+tabs.Visuals:AddRightGroupbox('Other'):AddDropdown('CharacterMaterial', {
+    Text = 'Character Material',
+    Default = "SmoothPlastic",
+    Values = {"SmoothPlastic", "Neon", "Metal", "Wood", "Concrete", "Brick", "Glass", "ForceField", "Plastic", "Foil", "Grass", "Ice", "Marble", "Sand", "Slate", "WoodPlanks"},
+    Callback = function(value)
+        Config.Misc.CharacterMaterial = value
+        ApplyCharacterMaterial()
+    end
+})
+
+tabs.Visuals:AddRightGroupbox('Other'):AddToggle('RayShowToggle', {
+    Text = 'Ray Show',
+    Default = false,
+    Callback = function(value)
+        Config.Visuals.RayShow = value
+        if not value then
+            for player in pairs(RuntimeData.RayRenderings) do
+                DestroyRayShow(player)
+            end
+        end
+    end
+})
+
+tabs.Movement:AddLeftGroupbox('Character'):AddToggle('SpeedToggle', {
     Text = 'WalkSpeed',
     Default = false,
     Callback = function(value)
@@ -1476,7 +1273,7 @@ Groups.Movement.Character:AddToggle('SpeedToggle', {
     Text = 'WalkSpeed'
 })
 
-Groups.Movement.Character:AddSlider('SpeedSlider', {
+tabs.Movement:AddLeftGroupbox('Character'):AddSlider('SpeedSlider', {
     Text = 'Speed Value',
     Default = 16,
     Min = 16,
@@ -1487,12 +1284,11 @@ Groups.Movement.Character:AddSlider('SpeedSlider', {
     end
 })
 
-Groups.Movement.Character:AddToggle('FlyToggle', {
+tabs.Movement:AddLeftGroupbox('Character'):AddToggle('FlyToggle', {
     Text = 'Fly',
     Default = false,
     Callback = function(value)
         Config.Movement.FlyEnabled = value
-        SetupFlight()
     end
 }):AddKeyPicker('FlyKey', {
     Default = 'None',
@@ -1501,7 +1297,7 @@ Groups.Movement.Character:AddToggle('FlyToggle', {
     Text = 'Fly'
 })
 
-Groups.Movement.Character:AddSlider('FlySpeed', {
+tabs.Movement:AddLeftGroupbox('Character'):AddSlider('FlySpeed', {
     Text = 'Fly Speed',
     Default = 50,
     Min = 10,
@@ -1512,7 +1308,7 @@ Groups.Movement.Character:AddSlider('FlySpeed', {
     end
 })
 
-Groups.Movement.Character:AddToggle('SpinBotToggle', {
+tabs.Movement:AddLeftGroupbox('Character'):AddToggle('SpinBotToggle', {
     Text = 'SpinBot',
     Default = false,
     Callback = function(value)
@@ -1525,7 +1321,7 @@ Groups.Movement.Character:AddToggle('SpinBotToggle', {
     Text = 'SpinBot'
 })
 
-Groups.Movement.Character:AddSlider('SpinBotSpeed', {
+tabs.Movement:AddLeftGroupbox('Character'):AddSlider('SpinBotSpeed', {
     Text = 'Spin Speed',
     Default = 100,
     Min = 1,
@@ -1536,25 +1332,23 @@ Groups.Movement.Character:AddSlider('SpinBotSpeed', {
     end
 })
 
-Groups.Movement.Other:AddToggle('InfiniteStaminaToggle', {
+tabs.Movement:AddRightGroupbox('Other'):AddToggle('InfiniteStaminaToggle', {
     Text = 'Infinite Stamina',
     Default = false,
     Callback = function(value)
         Config.Movement.InfiniteStamina = value
-        SetupInfiniteStamina()
     end
 })
 
-Groups.Movement.Other:AddToggle('FinishSpeedToggle', {
+tabs.Movement:AddRightGroupbox('Other'):AddToggle('FinishSpeedToggle', {
     Text = 'Finish Speed',
     Default = false,
     Callback = function(value)
         Config.Movement.FinishSpeedEnabled = value
-        SetupFinishSpeed()
     end
 })
 
-Groups.Movement.Other:AddSlider('FinishSpeedSlider', {
+tabs.Movement:AddRightGroupbox('Other'):AddSlider('FinishSpeedSlider', {
     Text = 'Finish Speed Multiplier',
     Default = 1,
     Min = 0.2,
@@ -1562,13 +1356,10 @@ Groups.Movement.Other:AddSlider('FinishSpeedSlider', {
     Rounding = 1,
     Callback = function(value)
         Config.Movement.FinishSpeedValue = value
-        if Config.Movement.FinishSpeedEnabled then
-            FinishSpeedMulti.Value = value
-        end
     end
 })
 
-Groups.Misc.General:AddButton({
+tabs.Misc:AddLeftGroupbox('General'):AddButton({
     Text = 'Fast Interact',
     Func = function()
         game:GetService("ProximityPromptService").PromptButtonHoldBegan:Connect(function(prompt)
@@ -1578,7 +1369,7 @@ Groups.Misc.General:AddButton({
     DoubleClick = false
 })
 
-Groups.Misc.General:AddSlider('GravitySlider', {
+tabs.Misc:AddLeftGroupbox('General'):AddSlider('GravitySlider', {
     Text = 'Gravity',
     Default = 196,
     Min = 75,
@@ -1590,11 +1381,11 @@ Groups.Misc.General:AddSlider('GravitySlider', {
     end
 })
 
-Groups.UISettings.Menu:AddButton('Unload', function()
+tabs.UISettings:AddLeftGroupbox('Menu'):AddButton('Unload', function()
     InterfaceLib:Unload()
 end)
 
-Groups.UISettings.Menu:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
+tabs.UISettings:AddLeftGroupbox('Menu'):AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
     Default = 'K',
     NoUI = true,
     Text = 'Menu keybind'
@@ -1607,8 +1398,8 @@ ConfigManager:IgnoreThemeSettings()
 ConfigManager:SetIgnoreIndexes({ 'MenuKeybind' })
 ThemeController:SetFolder('xvc')
 ConfigManager:SetFolder('xvc/configs')
-ConfigManager:BuildConfigSection(Tabs.UISettings)
-ThemeController:ApplyToTab(Tabs.UISettings)
+ConfigManager:BuildConfigSection(tabs.UISettings)
+ThemeController:ApplyToTab(tabs.UISettings)
 ConfigManager:LoadAutoloadConfig()
 
 local InputConnections = {}
@@ -1622,8 +1413,6 @@ InputConnections.InputBegan = UserInputService.InputBegan:Connect(function(input
                 RuntimeData.Aiming.TargetLocked = true
             end
         end
-    elseif input.KeyCode == Config.Movement.SpeedKey then
-        Config.Movement.SpeedEnabled = not Config.Movement.SpeedEnabled
     end
 end)
 
@@ -1648,13 +1437,17 @@ local RenderConnection = RunService.RenderStepped:Connect(function()
         end
     end
     UpdateMovementSpeed()
-    if Config.Movement.FlyEnabled then
-        SetupFlight()
+    UpdateFly()
+    UpdateInfiniteStamina()
+    UpdateFinishSpeed()
+    UpdateSpinBot()
+    if Config.Visuals.RayShow then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then
+                UpdateRayShow(player)
+            end
+        end
     end
-    if Config.Movement.SpinBotEnabled then
-        SetupSpinBot()
-    end
-    SetupFinishSpeed()
 end)
 
 for _, player in ipairs(Players:GetPlayers()) do
@@ -1671,12 +1464,8 @@ local ProjectileConnection = VParts.ChildAdded:Connect(function(projectile)
     if not Config.Launchers.Enabled or not LocalPlayer.Character or not RuntimeData.Launchers.ExpectedProjectile then return end
     if projectile.Name ~= RuntimeData.Launchers.ExpectedProjectile then return end
     if tick() - RuntimeData.Launchers.LastFireTime > 0.2 then return end
-    local weapons = ProjectileTypes[projectile.Name]
-    if weapons and CheckWeaponEquipped(weapons) then
-        task.spawn(function()
-            ControlRocket(projectile)
-        end)
-    end
+    task.spawn(ControlLauncher, projectile)
 end)
 
 PreloadWeapons()
+SetupMaterialOnCharacter()
